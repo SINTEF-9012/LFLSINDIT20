@@ -1,6 +1,8 @@
 import asyncio
+import os
+import tempfile
 from typing import Union, List
-from fastapi import HTTPException, Depends
+from fastapi import HTTPException, Depends, UploadFile, File as FastAPIFile
 from fastapi.responses import StreamingResponse
 from sindit.api.authentication_endpoints import User, get_current_active_user
 from sindit.initialize_kg_connectors import sindit_kg_connector
@@ -13,6 +15,9 @@ from sindit.connectors.setup_connectors import (
 from sindit.dataspace.setup_dataspace import (
     unpublish_node_from_all_active_dataspaces,
 )
+
+from ..knowledge_graph.pdf_file_to_kg import process_documents_to_graph
+from ..knowledge_graph.pdf_processing import load_and_chunk_pdf
 
 from sindit.knowledge_graph.graph_model import (
     SINDITKG,
@@ -29,6 +34,10 @@ from sindit.knowledge_graph.graph_model import (
 from sindit.util.log import logger
 
 from sindit.api.api import app
+
+from ..knowledge_graph.pdf_processing import (
+    load_and_chunk_pdf
+)
 
 
 @app.get("/kg/node_types", tags=["Knowledge Graph"])
@@ -252,6 +261,15 @@ async def create_connection(
         return {"result": result}
     except Exception as e:
         logger.error(f"Error saving connection node {node}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@app.post("/kg/clear", tags=["Knowledge Graph"])
+async def clear_graph():
+    try:
+        result = sindit_kg_connector.delete_all_nodes()
+        return {"result": result}
+    except Exception as e:
+        logger.error(f"Error clearing graph : {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -666,3 +684,72 @@ async def advanced_search_node(
     except Exception as e:
         logger.error(f"Error searching node: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+
+@app.post("/kg/sparql", tags=["Knowledge Graph"])
+async def execute_sparql_query(
+    body: dict,
+    current_user: User = Depends(get_current_active_user),
+) -> dict:
+    """Execute a raw SPARQL SELECT query on the knowledge graph.
+
+    Request body:
+    ```json
+    {
+        "query": "SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT 10",
+        "accept_content": "application/sparql-results+json"
+    }
+    ```
+    """
+    query = body.get("query")
+    if not query:
+        raise HTTPException(status_code=400, detail="Missing 'query' field in request body.")
+
+    accept_content = body.get("accept_content", "application/sparql-results+json")
+
+    try:
+        result = sindit_kg_connector.execute_sparql(query, accept_content)
+        return {"result": result}
+    except Exception as e:
+        logger.error(f"Error executing SPARQL query: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/kg/upload_pdf", tags=["Knowledge Graph"])
+async def upload_pdf_and_extract_kg(
+    file: UploadFile = FastAPIFile(...),
+    current_user: User = Depends(get_current_active_user),
+) -> dict:
+    """Upload a PDF and extract the knowledge graph via LLM."""
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="The file must be a PDF.")
+
+    content = await file.read()
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        tmp.write(content)
+        tmp_path = tmp.name
+
+    from ..llm.llm_config import _get_llm
+    try:
+        _get_llm()
+    except ConnectionError as e:
+        os.unlink(tmp_path)
+        raise HTTPException(status_code=503, detail=str(e))
+
+    print("PDF path:", tmp_path)
+    documents = load_and_chunk_pdf(tmp_path, 2000, 100)
+
+    # ⚠️ process_documents_to_graph is synchronous and calls SINDITClient (HTTP
+    # to localhost:9017). If called directly inside an async def, the uvicorn
+    # event loop is blocked and cannot process the /token request from
+    # SINDITClient → deadlock. Run it in a thread pool to free the loop.
+    import asyncio
+    from functools import partial
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, partial(process_documents_to_graph, documents))
+
+    os.unlink(tmp_path)
+    print("KG has been successfully established!")
+
+    return {"ok": True, "filename": file.filename, **result}

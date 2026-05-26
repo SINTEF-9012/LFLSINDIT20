@@ -77,6 +77,27 @@ class SINDITKGConnector:
             except Exception as e:
                 raise Exception(f"Failed to get the graph uris. Reason: {e}")
 
+    def execute_sparql(
+        self,
+        query: str,
+        accept_content: str = "application/sparql-results+json",
+    ) -> any:
+        """Execute a raw SPARQL SELECT query and return the raw result.
+
+        Args:
+            query: A valid SPARQL SELECT (or ASK/DESCRIBE/CONSTRUCT) query.
+            accept_content: Response format. Supported values:
+                - "application/sparql-results+json"  (default)
+                - "text/csv"
+                - "application/x-trig"
+        Returns:
+            The raw query result (string or dict depending on accept_content).
+        """
+        try:
+            return self.__kg_service.graph_query(query, accept_content)
+        except Exception as e:
+            raise Exception(f"Failed to execute SPARQL query. Reason: {e}")
+
     def search_unit(self, search_term: str):
         with open(search_unit_query_file, "r") as f:
             try:
@@ -593,6 +614,16 @@ class SINDITKGConnector:
                 "Failed to delete the node. Reason: " + query_result.content
             )
 
+        return query_result.ok
+
+    def delete_all_nodes(self) -> bool:
+        """Delete ALL nodes and triples from the current named graph via SPARQL CLEAR."""
+        query = f"CLEAR GRAPH <{self.__graph_uri}>"
+        query_result = self.__kg_service.graph_update(query)
+        if not query_result.ok:
+            raise Exception(
+                "Failed to clear the graph. Reason: " + str(query_result.content)
+            )
         return query_result.ok
 
     def update_node(
