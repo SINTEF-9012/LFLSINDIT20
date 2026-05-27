@@ -5,6 +5,7 @@ It includes functions to load PDF files, split them into pages,
 and chunk the text into smaller segments for further processing.
 """
 
+import logging
 import os
 import glob
 from typing import List, Tuple
@@ -110,7 +111,7 @@ def load_and_chunk_pdf(pdf_path: str, chunk_size: int = 2048, chunk_overlap: int
     total_pages = len(reader.pages)
 
     if start_page > 0:
-        print(f"[PDF] Skipping first {start_page} page(s) — starting at page {start_page} / {total_pages}", flush=True)
+        logging.warning(f"[PDF] Skipping first {start_page} page(s) — starting at page {start_page} / {total_pages}")
 
     pages = []
     for i, page in enumerate(reader.pages):
@@ -129,17 +130,17 @@ def load_and_chunk_pdf(pdf_path: str, chunk_size: int = 2048, chunk_overlap: int
     for page in pages:
         if is_blank_page(page.page_content):
             skipped_count += 1
-            print(f"⏭️ Skipping blank page (content: {page.page_content[:50]}...)")
+            logging.warning(f"⏭️ Skipping blank page (content: {page.page_content[:50]}...)")
         else:
             # Add source information to metadata for valid pages
             page.metadata['source'] = pdf_path
             filtered_pages.append(page)
     
     if skipped_count > 0:
-        print(f"🗑️ Filtered out {skipped_count} blank pages from {pdf_path}")
+        logging.warning(f"🗑️ Filtered out {skipped_count} blank pages from {pdf_path}")
     
     if not filtered_pages:
-        print(f"❌ No valid content found after filtering in {pdf_path}")
+        logging.error(f"❌ No valid content found after filtering in {pdf_path}")
         return []
 
     size = chunk_size * 4       # tokens → characters approximation
@@ -176,9 +177,9 @@ def get_pdf_files_from_directory(directory_path: str) -> List[str]:
     # Sort the files for consistent processing order
     pdf_files.sort()
     
-    print(f"Found {len(pdf_files)} PDF files in {directory_path}")
+    logging.info(f"Found {len(pdf_files)} PDF files in {directory_path}")
     for pdf_file in pdf_files:
-        print(f"  - {pdf_file}")
+        logging.info(f"  - {pdf_file}")
     
     return pdf_files
 
@@ -199,14 +200,14 @@ def process_pdf_directory_individually(directory_path: str, chunk_size: int = 20
     pdf_files = get_pdf_files_from_directory(directory_path)
     
     if not pdf_files:
-        print(f"No PDF files found in directory: {directory_path}")
+        logging.info(f"No PDF files found in directory: {directory_path}")
         return [], {}
     
     all_documents = []
     file_mapping = {}
     
     for pdf_file in pdf_files:
-        print(f"Processing PDF file: {pdf_file}")
+        logging.info(f"Processing PDF file: {pdf_file}")
         try:
             # Load and chunk the current PDF file
             documents = load_and_chunk_pdf(pdf_file, chunk_size, chunk_overlap)
@@ -229,16 +230,16 @@ def process_pdf_directory_individually(directory_path: str, chunk_size: int = 20
                 'document_count': len(documents)
             }
             
-            print(f"  - Loaded {len(documents)} document chunks from {pdf_file}")
+            logging.info(f"  - Loaded {len(documents)} document chunks from {pdf_file}")
             
         except (FileNotFoundError, PermissionError, ValueError) as e:
-            print(f"Error processing {pdf_file}: {str(e)}")
+            logging.error(f"Error processing {pdf_file}: {str(e)}")
             continue
         except Exception as e:
-            print(f"Unexpected error processing {pdf_file}: {str(e)}")
+            logging.error(f"Unexpected error processing {pdf_file}: {str(e)}")
             continue
     
-    print(f"Total documents loaded: {len(all_documents)}")
+    logging.info(f"Total documents loaded: {len(all_documents)}")
     return all_documents, file_mapping
 
 def process_all_pdfs_in_directory_batch(directory_path: str, chunk_size: int = 2048, chunk_overlap: int = 100) -> List[Document]:
@@ -256,13 +257,13 @@ def process_all_pdfs_in_directory_batch(directory_path: str, chunk_size: int = 2
     pdf_files = get_pdf_files_from_directory(directory_path)
     
     if not pdf_files:
-        print(f"No PDF files found in directory: {directory_path}")
+        logging.info(f"No PDF files found in directory: {directory_path}")
         return []
     
     all_documents = []
     
     for pdf_file in pdf_files:
-        print(f"Processing PDF file: {pdf_file}")
+        logging.info(f"Processing PDF file: {pdf_file}")
         try:
             # Load and chunk the current PDF file
             documents = load_and_chunk_pdf(pdf_file, chunk_size, chunk_overlap)
@@ -276,16 +277,16 @@ def process_all_pdfs_in_directory_batch(directory_path: str, chunk_size: int = 2
                 doc.metadata['batch_processing'] = True
             
             all_documents.extend(documents)
-            print(f"  - Loaded {len(documents)} document chunks from {pdf_file}")
+            logging.info(f"  - Loaded {len(documents)} document chunks from {pdf_file}")
             
         except (FileNotFoundError, PermissionError, ValueError) as e:
-            print(f"Error processing {pdf_file}: {str(e)}")
+            logging.error(f"Error processing {pdf_file}: {str(e)}")
             continue
         except Exception as e:
-            print(f"Unexpected error processing {pdf_file}: {str(e)}")
+            logging.error(f"Unexpected error processing {pdf_file}: {str(e)}")
             continue
     
-    print(f"Total documents loaded in batch: {len(all_documents)}")
+    logging.info(f"Total documents loaded in batch: {len(all_documents)}")
     return all_documents
 
 def get_subdirectories(directory_path: str) -> List[str]:
@@ -310,9 +311,9 @@ def get_subdirectories(directory_path: str) -> List[str]:
     # Sort the subdirectories for consistent processing order
     subdirectories.sort()
     
-    print(f"Found {len(subdirectories)} subdirectories in {directory_path}")
+    logging.info(f"Found {len(subdirectories)} subdirectories in {directory_path}")
     for subdir in subdirectories:
-        print(f"  - {subdir}")
+        logging.info(f"  - {subdir}")
     
     return subdirectories
 
@@ -331,16 +332,16 @@ def process_subdirectories_individually(directory_path: str, chunk_size: int = 2
     subdirectories = get_subdirectories(directory_path)
     
     if not subdirectories:
-        print(f"No subdirectories found in directory: {directory_path}")
+        logging.info(f"No subdirectories found in directory: {directory_path}")
         return {}
     
     results = {}
     
     for subdir in subdirectories:
         subdir_name = os.path.basename(subdir)
-        print(f"\n{'='*50}")
-        print(f"Processing subdirectory: {subdir_name}")
-        print(f"{'='*50}")
+        logging.info(f"\n{'='*50}")
+        logging.info(f"Processing subdirectory: {subdir_name}")
+        logging.info(f"{'='*50}")
         
         try:
             # Process all PDFs in this subdirectory
@@ -362,10 +363,10 @@ def process_subdirectories_individually(directory_path: str, chunk_size: int = 2
                 'document_count': len(documents)
             }
             
-            print(f"Completed processing {subdir_name}: {len(documents)} documents")
+            logging.info(f"Completed processing {subdir_name}: {len(documents)} documents")
             
         except Exception as e:
-            print(f"Error processing subdirectory {subdir_name}: {str(e)}")
+            logging.error(f"Error processing subdirectory {subdir_name}: {str(e)}")
             results[subdir_name] = {
                 'documents': [],
                 'file_mapping': {},
@@ -376,8 +377,8 @@ def process_subdirectories_individually(directory_path: str, chunk_size: int = 2
             continue
     
     total_documents = sum(result['document_count'] for result in results.values())
-    print(f"\n{'='*50}")
-    print(f"Total documents processed across all subdirectories: {total_documents}")
-    print(f"{'='*50}")
+    logging.info(f"\n{'='*50}")
+    logging.info(f"Total documents processed across all subdirectories: {total_documents}")
+    logging.info(f"{'='*50}")
     
     return results

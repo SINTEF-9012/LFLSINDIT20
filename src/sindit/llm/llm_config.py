@@ -71,8 +71,9 @@ def _get_llm():
     global _llm
     if _llm is None:
         from langchain_ollama import ChatOllama
+        import logging
         model_name = CHAT_MODEL.strip('"') if CHAT_MODEL else 'qwen3:8b-16k'
-        print(f"🤖 Initializing LLM: {model_name}")
+        logging.info(f"🤖 Initializing LLM: {model_name}")
         _llm = ChatOllama(
             model=model_name,
             temperature=0.0,
@@ -80,5 +81,5 @@ def _get_llm():
             think=False,  # Disables qwen3's thinking mode
             timeout=120,  # 2-minute hard timeout — prevents silent hangs
         )
-        print(f"✅ LLM initialized")
+        logging.info(f"✅ LLM initialized")
     return _llm

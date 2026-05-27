@@ -6,6 +6,7 @@ CNC machining time-series visualizations using Large Language Models with
 vision capabilities, enabling multimodal analysis of charts and signals.
 """
 
+import logging
 import base64
 import os
 from typing import Dict
@@ -333,7 +334,7 @@ class ChartImageSaver:
             )
             return True
         except Exception as e:
-            print(f"Error saving chart: {e}")
+            logging.error(f"Error saving chart: {e}")
             return False
 
 
@@ -374,10 +375,10 @@ def generate_comprehensive_process_explanation(
     analyzer = LLMImageAnalyzer(temperature=0.1, max_tokens=2000)
 
     if custom_prompt and custom_prompt.strip():
-        print("Generating CNC analysis (data + image + custom prompt)...")
+        logging.info("Generating CNC analysis (data + image + custom prompt)...")
         return analyzer.analyze_with_data_image_and_custom_prompt(
             image_path, process_data_summary, custom_prompt
         )
     else:
-        print("Generating CNC analysis (data + image)...")
+        logging.info("Generating CNC analysis (data + image)...")
         return analyzer.analyze_with_data_and_image(image_path, process_data_summary)

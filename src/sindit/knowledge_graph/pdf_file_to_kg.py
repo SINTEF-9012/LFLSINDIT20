@@ -1,8 +1,10 @@
+import logging
 import os
+
 
 # Print startup message BEFORE heavy imports (langchain, pypdf, etc.)
 if __name__ == "__main__":
-    print("Loading the app!")
+    logging.info("Loading the app!")
 
 from .pdf_processing import (
     load_and_chunk_pdf,
@@ -20,13 +22,13 @@ def process_pdf_file(pdf_path: str):
     Args:
         pdf_path (str): Path to the PDF file.
     """
-    print("process_pdf_file !!!\n")
+    logging.info("process_pdf_file !!!\n")
     # Check if the file exists
     if not os.path.isfile(pdf_path):
         raise ValueError(f"File path {pdf_path} is not a valid file.")
 
     # Load and chunk the PDF file
-    print(f"Loading and chunking PDF file: {pdf_path}")
+    logging.info(f"Loading and chunking PDF file: {pdf_path}")
     documents = load_and_chunk_pdf(pdf_path)
 
     # Process documents and create graph
@@ -39,10 +41,10 @@ def process_pdf_directory_individual(directory_path: str):
     Args:
         directory_path (str): Path to the directory containing PDF files.
     """
-    print(f"Processing all PDF files in directory: {directory_path}")
+    logging.info(f"Processing all PDF files in directory: {directory_path}")
     documents, file_mapping = process_pdf_directory_individually(directory_path)
     
-    print(f"File mapping: {file_mapping}")
+    logging.info(f"File mapping: {file_mapping}")
     process_documents_to_graph(documents)
 
 def process_subdirectories_with_separate_graphs(directory_path: str):
@@ -52,11 +54,11 @@ def process_subdirectories_with_separate_graphs(directory_path: str):
     Args:
         directory_path (str): Path to the directory containing subdirectories with PDF files.
     """
-    print(f"Processing subdirectories in: {directory_path}")
+    logging.info(f"Processing subdirectories in: {directory_path}")
     subdirectory_results = process_subdirectories_individually(directory_path)
     
     if not subdirectory_results:
-        print("No subdirectories found or processed.")
+        logging.info("No subdirectories found or processed.")
         return
     
     # Collect processed sources
@@ -65,21 +67,21 @@ def process_subdirectories_with_separate_graphs(directory_path: str):
     # Process each subdirectory's documents separately
     for subdir_name, result in subdirectory_results.items():
         if 'error' in result:
-            print(f"Skipping {subdir_name} due to error: {result['error']}")
+            logging.error(f"Skipping {subdir_name} due to error: {result['error']}")
             continue
             
         documents = result['documents']
         file_mapping = result['file_mapping']
         
         if not documents:
-            print(f"No documents found in subdirectory: {subdir_name}")
+            logging.info(f"No documents found in subdirectory: {subdir_name}")
             continue
         
-        print(f"\n{'='*50}")
-        print(f"Creating graph for subdirectory: {subdir_name}")
-        print(f"Documents to process: {len(documents)}")
-        print(f"File mapping: {file_mapping}")
-        print(f"{'='*50}")
+        logging.info(f"\n{'='*50}")
+        logging.info(f"Creating graph for subdirectory: {subdir_name}")
+        logging.info(f"Documents to process: {len(documents)}")
+        logging.info(f"File mapping: {file_mapping}")
+        logging.info(f"{'='*50}")
         
         # Create a separate graph for this subdirectory
         process_documents_to_graph(documents, subdir_name)
@@ -107,17 +109,17 @@ def process_documents_to_graph(
                       starting. Set to False when resuming from a crash so
                       that already-stored assets are preserved. (default: False)
     """
-    print(f"Processing document chunks for graph: {graph_name}", flush=True)
+    logging.info(f"Processing document chunks for graph: {graph_name}")
 
     from ..util.sindit_client import SINDITClient
     client = SINDITClient()
 
     if clean_graph:
-        print("[KG] Cleaning existing graph before processing...", flush=True)
+        logging.info("[KG] Cleaning existing graph before processing...")
         client.clean_graph()
-        print("[KG] Graph cleaned.", flush=True)
+        logging.info("[KG] Graph cleaned.")
     else:
-        print("[KG] Skipping graph clean (clean_graph=False).", flush=True)
+        logging.warning("[KG] Skipping graph clean (clean_graph=False).")
 
     assets = []
     # dict id → {"id", "type", "page"} — keeps the first occurrence per asset
@@ -127,15 +129,15 @@ def process_documents_to_graph(
     total = len(documents)
 
     if start_chunk > 0:
-        print(f"[KG] Resuming from chunk {start_chunk + 1}/{total} (skipping first {start_chunk} chunk(s)).", flush=True)
+        logging.warning(f"[KG] Resuming from chunk {start_chunk + 1}/{total} (skipping first {start_chunk} chunk(s)).")
 
     effective_docs = documents[start_chunk:]
-    print(f"[KG] Chunks to process: {len(effective_docs)} (total in file: {total})", flush=True)
+    logging.info(f"[KG] Chunks to process: {len(effective_docs)} (total in file: {total})")
 
     for i, doc in enumerate(tqdm(effective_docs, desc=f"Processing documents for {graph_name}\n")):
         absolute_index = start_chunk + i
         page_num = doc.metadata.get('page', '?')
-        print(f"[KG] Chunk {absolute_index + 1}/{total} — {len(doc.page_content)} chars (page {page_num})", flush=True)
+        logging.info(f"[KG] Chunk {absolute_index + 1}/{total} — {len(doc.page_content)} chars (page {page_num})")
         graph_document = extract_and_store_graph(doc, source_label=graph_name)
         if graph_document:
             assets.extend(graph_document.assets or [])
@@ -157,12 +159,12 @@ def process_documents_to_graph(
 
     asset_list = list(distinct_assets.values())
 
-    print(f"Graph '{graph_name}' - Distinct assets: {len(asset_list)}")
-    print(f"Graph '{graph_name}' - Relations: {len(relations)}")
-    print(f"Graph '{graph_name}' - Completed processing")
-    print("All assets:")
+    logging.info(f"Graph '{graph_name}' - Distinct assets: {len(asset_list)}")
+    logging.info(f"Graph '{graph_name}' - Relations: {len(relations)}")
+    logging.info(f"Graph '{graph_name}' - Completed processing")
+    logging.info("All assets:")
     for a in asset_list:
-        print(f"- id={a['id']}, type={a['type']}, page={a['page']}")
+        logging.info(f"- id={a['id']}, type={a['type']}, page={a['page']}")
 
     return {
         'graph_name': graph_name,
@@ -184,7 +186,7 @@ if __name__ == "__main__":
     # Skip the first N pages of the PDF (0 = process all pages).
     # Useful to skip cover page, table of contents, legal notices, etc.
     # Example: START_PAGE = 5  →  processing starts at page index 5
-    START_PAGE = 30
+    START_PAGE = 210
 
     # Skip the first N chunks (0 = process all chunks).
     # Use this to RESUME after a crash: set to the last successfully
@@ -206,26 +208,26 @@ if __name__ == "__main__":
     # ─────────────────────────────────────────────────────────────────
 
     PDF_PATH = os.path.normpath(PDF_PATH)
-    print("Imports done — app ready!")
+    logging.info("Imports done — app ready!")
 
     # Check Ollama connection before processing
     from .graph_transformer import _get_llm
     try:
         _get_llm()
     except ConnectionError as e:
-        print(e)
+        logging.info(e)
         exit(1)
 
-    print("Current directory:", os.getcwd())
-    print("PDF path: ", PDF_PATH)
-    print("File found: ", os.path.isfile(PDF_PATH))
-    print(f"Start page: {START_PAGE}")
-    print(f"Start chunk: {START_CHUNK}")
-    print(f"Clean graph: {CLEAN_GRAPH}")
+    logging.info(f"Current directory: {os.getcwd()}")
+    logging.info(f"PDF path: {PDF_PATH}")
+    logging.info(f"File found: {os.path.isfile(PDF_PATH)}")
+    logging.info(f"Start page: {START_PAGE}")
+    logging.info(f"Start chunk: {START_CHUNK}")
+    logging.info(f"Clean graph: {CLEAN_GRAPH}")
 
     if os.path.isfile(PDF_PATH):
-        print("Loading and chunking the PDF...")
+        logging.info("Loading and chunking the PDF...")
         documents = load_and_chunk_pdf(PDF_PATH, CHUNK_SIZE, CHUNK_OVERLAP, start_page=START_PAGE)
-        print(f"Total chunks after filtering: {len(documents)}")
+        logging.info(f"Total chunks after filtering: {len(documents)}")
         process_documents_to_graph(documents, graph_name=GRAPH_NAME, start_chunk=START_CHUNK, clean_graph=CLEAN_GRAPH)
-        print("KG has been successfully established!")
+        logging.info("KG has been successfully established!")

@@ -4,6 +4,7 @@ CNC Machine Data Visualization Dashboard
 A Streamlit app for visualizing CNC workpiece data with interactive charts.
 """
 
+import logging
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -55,7 +56,7 @@ def visualize_workpiece_activity(workpiece_data, workpiece_name, resample_interv
         workpiece_name    : str, OF identifier used in chart title
         resample_interval : str, pandas offset string used during loading
     """
-    print("start visualize_workpiece_activity")
+    logging.info("start visualize_workpiece_activity")
 
     if workpiece_data is None or workpiece_data.empty:
         st.warning(f"No data available for {workpiece_name}")
@@ -237,7 +238,7 @@ def visualize_workpiece_activity(workpiece_data, workpiece_name, resample_interv
         paper_bgcolor="white",
         font=dict(color="black"),
     )
-    print("end visualize_workpiece_activity")
+    logging.info("end visualize_workpiece_activity")
 
     return fig
 

@@ -9,6 +9,7 @@ This replaces the old "fetch all nodes then RAG" approach with a proper
 Text2SPARQL flow, equivalent to GraphCypherQAChain but for GraphDB/SPARQL.
 """
 
+import logging
 import json
 import os
 from typing import Optional, Type
@@ -157,7 +158,7 @@ class SINDITGraphTool(BaseTool):
                 if not line.strip().startswith("```")
             )
 
-        print(f"[SINDITGraphTool] Generated SPARQL:\n{sparql_query}")
+        logging.info(f"[SINDITGraphTool] Generated SPARQL:\n{sparql_query}")
         return sparql_query.strip()
 
     # ------------------------------------------------------------------
@@ -198,7 +199,7 @@ class SINDITGraphTool(BaseTool):
         try:
             # Always guarantee the prefix is present regardless of what the LLM produced
             sparql_query = self._inject_prefixes(sparql_query)
-            print(f"[SINDITGraphTool] Sending SPARQL:\n{sparql_query}")
+            logging.info(f"[SINDITGraphTool] Sending SPARQL:\n{sparql_query}")
 
             client = SINDITClient()
             data = client.post(
@@ -211,7 +212,7 @@ class SINDITGraphTool(BaseTool):
             result = data.get("result", data)
             return json.dumps(result, indent=2, ensure_ascii=False)
         except Exception as e:
-            print(f"[SINDITGraphTool] SPARQL execution failed: {e}")
+            logging.error(f"[SINDITGraphTool] SPARQL execution failed: {e}")
             return f"SPARQL execution error: {e}"
 
     # ------------------------------------------------------------------
@@ -249,11 +250,11 @@ Answer with valid JSON only, no explanation:
             result = json.loads(raw.strip())
             needs_kg = result.get("needs_kg", True)
             direct_answer = result.get("direct_answer", None)
-            print(f"[SINDITGraphTool] History classifier → needs_kg={needs_kg}")
+            logging.info(f"[SINDITGraphTool] History classifier → needs_kg={needs_kg}")
             return (needs_kg, direct_answer)
         except :
             # If parsing fails, default to querying the KG (safe fallback)
-            print(f"[SINDITGraphTool] History classifier JSON parse failed, defaulting to KG query")
+            logging.error(f"[SINDITGraphTool] History classifier JSON parse failed, defaulting to KG query")
             return (True, None)
 
     # ------------------------------------------------------------------
@@ -277,12 +278,12 @@ Answer with valid JSON only, no explanation:
         Returns:
             str: Natural language answer.
         """
-        print(f"[SINDITGraphTool] Question: {question}")
+        logging.info(f"[SINDITGraphTool] Question: {question}")
 
         # Step 0 — History classifier
         needs_kg, direct_answer = self._can_answer_from_history(question)
         if not needs_kg and direct_answer:
-            print(f"[SINDITGraphTool] Answered from history, skipping SPARQL.")
+            logging.warning(f"[SINDITGraphTool] Answered from history, skipping SPARQL.")
             return direct_answer
 
         # Step 1 — Generate SPARQL
@@ -290,14 +291,14 @@ Answer with valid JSON only, no explanation:
 
         # Step 2 — Execute query
         sparql_results = self._execute_sparql(sparql_query)
-        print(f"[SINDITGraphTool] SPARQL results : {sparql_results}")
+        logging.info(f"[SINDITGraphTool] SPARQL results : {sparql_results}")
 
         # Step 3 — QA: format results into a natural language answer
         llm = _get_llm()
         qa_prompt = QA_PROMPT.format(context=sparql_results, question=question)
-        print(f"[SINDITGraphTool] QA_Prompt : {qa_prompt}")
+        logging.info(f"[SINDITGraphTool] QA_Prompt : {qa_prompt}")
 
         response = llm.invoke(qa_prompt)
-        print(f"[SINDITGraphTool] Response : {response}")
+        logging.info(f"[SINDITGraphTool] Response : {response}")
 
         return response.content if hasattr(response, "content") else str(response)

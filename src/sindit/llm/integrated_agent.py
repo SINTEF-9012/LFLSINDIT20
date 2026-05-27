@@ -6,6 +6,7 @@ and analytics capabilities to provide comprehensive manufacturing intelligence
 and decision support.
 """
 
+import logging
 import json
 import os
 import numpy as np
@@ -154,7 +155,7 @@ class IntegratedAgent:
                     self.question_embeddings[category] = np.array(embeddings)
         except Exception as e:
             # Fallback: use simple keyword matching if embeddings fail
-            print(f"Warning: Semantic classification initialization failed: {e}")
+            logging.error(f"Warning: Semantic classification initialization failed: {e}")
             self.question_embeddings = None
 
     def _cosine_similarity(self, vec1, vec2):
@@ -198,7 +199,7 @@ class IntegratedAgent:
             return category_scores
             
         except Exception as e:
-            print(f"Warning: Semantic classification failed: {e}")
+            logging.error(f"Warning: Semantic classification failed: {e}")
             # Fallback to equal weights
             return {'documentation': 0.33, 'monitoring': 0.33, 'analytics': 0.33}
 
@@ -544,8 +545,8 @@ class IntegratedAgent:
             "source_filter": source_filter
         }
 
-        print("QUERY CLASSIFICATION : ")
-        print(query_classification)
+        logging.info("QUERY CLASSIFICATION : ")
+        logging.info(query_classification)
 
         # CONVERSATIONAL SHORTCUT: if no agent is needed (pure meta/conversational question),
         # skip all agents and answer directly from the enriched user_query which already
@@ -553,13 +554,13 @@ class IntegratedAgent:
         no_agent_needed = not query_classification['RetrieverAgent'] and not query_classification['MonitoringAgent'] and not query_classification['AnalyticsAgent']
         
         if no_agent_needed:
-            print("No agent needed — answering directly from conversation history")
+            logging.info("No agent needed — answering directly from conversation history")
             result = self.conversation_chain.invoke({"input": user_query})
             return result.content if hasattr(result, "content") else str(result)
 
         # Get documentation context if needed
         if query_classification['RetrieverAgent']:
-            print("I need the RetrieverAgent")
+            logging.info("I need the RetrieverAgent")
             try:
                 doc_context = self.retriever_agent.get_documentation_context(user_query, source_filter=source_filter)
                 context["documentation"] = doc_context
@@ -568,7 +569,7 @@ class IntegratedAgent:
 
         # Get real-time context if needed (only if monitoring agent is connected)
         if query_classification['MonitoringAgent']:
-            print("I need the MonitoringAgent")
+            logging.info("I need the MonitoringAgent")
             if self.monitoring_agent is not None:
                 try:
                     realtime_context = self.monitoring_agent.get_realtime_context(user_query)
@@ -581,7 +582,7 @@ class IntegratedAgent:
         # Get analytics context if needed
         self.last_figure = None  # Reset before each query
         if query_classification['AnalyticsAgent']:
-            print("I need the AnalyticsAgent")
+            logging.info("I need the AnalyticsAgent")
             try:
                 # Parse time range from the user query first
                 parsed_time_range = None

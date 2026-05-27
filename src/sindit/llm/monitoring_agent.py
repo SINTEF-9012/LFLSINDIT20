@@ -1,243 +1,369 @@
 """
-Monitoring Agent for Real-time Manufacturing Process Monitoring.
+Monitoring Agent for Real-time CNC Machine Monitoring.
 
-This module provides real-time monitoring capabilities for manufacturing processes,
-including anomaly detection, status tracking, and proactive alerting for
-manufacturing operations.
+Flow:
+  1. User asks a natural-language question about live machine data.
+  2. The LLM classifies the query → returns which signals to subscribe to,
+     how long to collect (period), and the sampling interval.
+  3. The agent connects to the SINTEF MQTT broker, collects messages for
+     `period` seconds, downsamples to one per `sample_interval`, then
+     passes the samples to the LLM for a natural-language answer.
 """
 
 import json
 import os
 import sys
-from typing import Any, Dict, Optional
+import time
+import logging
+from random import randint
+from typing import Any, Dict, List, Optional
 
-# Add the src directory to the path to import utils
+from paho.mqtt import client as mqtt_client
+from pydantic import BaseModel
+from langchain_core.prompts import ChatPromptTemplate
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from langchain_core.prompts import (ChatPromptTemplate, HumanMessagePromptTemplate,
-                               SystemMessagePromptTemplate)
-from langchain.tools import BaseTool
-from pydantic import BaseModel
-
 from .llm_config import _get_llm
-from ..util.sindit_client import SINDITClient
 
-class MonitoringQuery(BaseModel):
-    query: str
-    asset_type: Optional[str] = None
-    property_type: Optional[str] = None
 
-client = SINDITClient()
+# ─────────────────────────────────────────────────────────────────────────────
+# MQTT broker credentials (SINTEF CNC machines)
+# ─────────────────────────────────────────────────────────────────────────────
+MQTT_BROKER   = os.getenv("MQTT_BROKER",   "158.158.8.212")
+MQTT_PORT     = int(os.getenv("MQTT_PORT", "1883"))
+MQTT_USERNAME = os.getenv("MQTT_USERNAME", "reader_user")
+MQTT_PASSWORD = os.getenv("MQTT_PASSWORD", "FpWWvYKMZ.ub3G!lAx6b3")
 
-class SINDITDataTool(BaseTool):
-    name: str = "sindit_data_tool"
-    description: str = "Tool for retrieving real-time manufacturing data from SINDIT Knowledge Graph API."
-    args_schema: type[MonitoringQuery] = MonitoringQuery
+# Base topic — signals go after data/
+# reed/machine/+/workorder/+/group/+/data/<signal>
+MQTT_BASE_TOPIC = "reed/machine/+/workorder/+/group/+/data"
 
-    def classify_query(self, query: str) -> Dict[str, Any]:
-        key_assets = [
-            "http://sindit.sintef.no/2.0#factory-sensor",
-            "http://sindit.sintef.no/2.0#camera",
-            "http://sindit.sintef.no/2.0#vgr",
-            "http://sindit.sintef.no/2.0#hbw",
-            "http://sindit.sintef.no/2.0#sld",
-            "http://sindit.sintef.no/2.0#mpo",
-            "http://sindit.sintef.no/2.0#dso",
-            "http://sindit.sintef.no/2.0#dsi",
-            "http://sindit.sintef.no/2.0#order",
-        ]
+# ─────────────────────────────────────────────────────────────────────────────
+# Known signals — these are the valid values that can appear after data/
+# The LLM must return only values from this list.
+# ─────────────────────────────────────────────────────────────────────────────
+KNOWN_SIGNALS: List[str] = [
+    # TYZBPS — general machine state
+    "Spindle_Speed_Actual",
+    "Spindle_Speed_Commanded",
+    "Spindle_Speed_Override",
+    "Feed_Rate_Actual",
+    "Feed_Rate_Commanded",
+    "Feed_Override",
+    "Power_Active",
+    "Power_Apparent",
+    "Power_Reactive",
+    "Power_Factor",
+    "Power_Spindle",
+    "Energy_Total",
+    "Offset_X",
+    "Offset_Y",
+    "Offset_Z",
+    "Position_MCS_X",
+    "Position_MCS_Y",
+    "Position_MCS_Z",
+    "Position_MCS_A",
+    "Position_MCS_C",
+    "Temperature_Head",
+    "Temperature_Room",
+    "Temperature_Y",
+    "Temperature_Z",
+    "Tool_Number",
+    "Tool_Length",
+    "Tool_Radius",
+    "Program_Name",
+    "Program_Block_Number",
+    "Head_Angular_On",
+    "Head_Auto_On",
+    "Head_Boring_On",
+    "Operation_Mode",
+    "Operation_Status",
+    # BXCZ3M — axis power
+    "Power_X1",
+    "Power_X2",
+    "Power_Y",
+    "Power_Z",
+    # 7N4ZJ8 — vibration and chatter
+    "Chatter_Detection_OnOff_X",
+    "Chatter_Detection_OnOff_Y",
+    "Chatter_Detection_Amplitude_X",
+    "Chatter_Detection_Amplitude_Y",
+    "Chatter_Detection_Frequency_X",
+    "Chatter_Detection_Frequency_Y",
+    "Vibration_Severity_X",
+    "Vibration_Severity_Y",
+    "Vibration_Harmonic_1_X_Amplitude",
+    "Vibration_Harmonic_1_Y_Amplitude",
+    "Vibration_Peak_1_X_Amplitude",
+    "Vibration_Peak_1_Y_Amplitude",
+]
 
-        asset_keywords = {
-            "vgr": ["vgr", "vacuum gripper", "gripper", "robot"],
-            "hbw": ["hbw", "high bay warehouse", "warehouse", "storage"],
-            "sld": ["sld", "sorting line", "detection", "sorting"],
-            "mpo": ["mpo", "multi processing", "oven", "processing station"],
-            "dso": ["dso", "outgoing", "output", "piece out"],
-            "dsi": ["dsi", "incoming", "input", "piece in"],
-            "factory-sensor": ["temperature", "humidity", "air quality", "brightness", "sensor", "environmental", "environment"],
-            "camera": ["camera", "vision", "image", "picture"],
-            "order": ["order", "production order", "manufacturing order", "order status"],
-            "Stock": ["stock", "inventory", "material"]
-        }
 
-        query_lower = query.lower()
+class MQTTQueryParams(BaseModel):
+    """
+    Parameters extracted by the LLM from the user's query.
 
-        # Find specific assets mentioned in the query
-        relevant_assets = []
-        for asset_key, keywords in asset_keywords.items():
-            if any(keyword in query_lower for keyword in keywords):
-                asset_uri = f"http://sindit.sintef.no/2.0#{asset_key}"
-                if asset_uri in key_assets:
-                    relevant_assets.append(asset_uri)
+    signals         : list of signal names (must be from KNOWN_SIGNALS)
+                      that are relevant to the user's question.
+                      These will be appended after data/ in the MQTT topic.
+    period          : total duration (seconds) to listen on the broker.
+    sample_interval : one message is kept per this many seconds (downsampling).
+    """
+    signals: List[str]
+    period: float
+    sample_interval: float
 
-        # If no specific assets found, default to key manufacturing assets
-        if not relevant_assets:
-            return key_assets
 
-        return relevant_assets
+def validate_mqtt_params(params: MQTTQueryParams) -> MQTTQueryParams:
+    """
+    Validate that the LLM returned sensible MQTT query parameters.
 
-    def _run(self, query: str, **kwargs):
+    - Filters out signal names not in KNOWN_SIGNALS.
+    - Falls back to a safe default if signals list is empty after filtering.
+    - Clamps period and sample_interval to reasonable bounds.
+
+    Returns a corrected MQTTQueryParams.
+    """
+    # Filter signals to only known ones
+    valid_signals = [s for s in params.signals if s in KNOWN_SIGNALS]
+
+    if not valid_signals:
+        logging.warning(
+            "[MonitoringAgent] LLM returned no valid signals %s — "
+            "falling back to Spindle_Speed_Actual + Power_Active",
+            params.signals,
+        )
+        valid_signals = ["Spindle_Speed_Actual", "Power_Active"]
+
+    unknown = [s for s in params.signals if s not in KNOWN_SIGNALS]
+    if unknown:
+        logging.warning("[MonitoringAgent] Unknown signals ignored: %s", unknown)
+
+    # Clamp period: between 2s and 60s
+    period = max(2.0, min(float(params.period), 60.0))
+
+    # Clamp sample_interval: between 0.5s and period
+    sample_interval = max(0.5, min(float(params.sample_interval), period))
+
+    return MQTTQueryParams(
+        signals=valid_signals,
+        period=period,
+        sample_interval=sample_interval,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MQTT tool
+# ─────────────────────────────────────────────────────────────────────────────
+
+_CLASSIFIER_PROMPT = ChatPromptTemplate.from_messages([
+    ("system", """You are a signal classifier for CNC machine MQTT data.
+
+The MQTT topic structure is:
+  reed/machine/+/workorder/+/group/+/data/<signal_name>
+
+The available signal names are:
+{known_signals}
+
+Given the user's question, return a JSON object with exactly these fields:
+{{
+  "signals": ["Signal_Name_1", "Signal_Name_2"],
+  "period": <float, seconds to listen, between 5 and 30>,
+  "sample_interval": <float, seconds between samples, between 1 and 5>
+}}
+
+Rules:
+- Only use signal names from the list above.
+- Choose signals that are directly relevant to the question.
+- If the question is general, return the most common signals: Spindle_Speed_Actual, Feed_Rate_Actual, Power_Active.
+- Respond ONLY with the JSON object, no explanation.
+"""),
+    ("human", "{query}"),
+])
+
+_ANSWER_PROMPT = ChatPromptTemplate.from_messages([
+    ("system", """You are a real-time monitoring agent for CNC industrial machines.
+You receive MQTT messages collected live from the machines and must answer
+the user's question based on this data.
+
+Each sample contains:
+- topic        : full MQTT topic (encodes machine id, workorder, group, signal)
+- payload      : the sensor value at that moment
+- received_at  : Unix timestamp
+
+When answering:
+1. Extract the relevant signal values from the samples.
+2. Summarise min / max / average where relevant.
+3. Flag any anomalies (e.g. chatter detected, abnormal temperature).
+4. Be concise and technical.
+5. If no data was received, say so clearly.
+"""),
+    ("human", "User question: {question}\n\nMQTT samples:\n{samples}"),
+])
+
+
+class SINDITMQTTTool:
+    """
+    Connects to the SINTEF MQTT broker, collects messages for a given period,
+    and downsamples to one message per sample_interval window.
+    """
+
+    def connect_mqtt(self) -> mqtt_client.Client:
+        """Create and connect a paho MQTT client to the SINTEF broker."""
+        client_id = f"sindit-monitor-{randint(0, 9999)}"
+
+        def on_connect(client, userdata, flags, rc):
+            if rc == 0:
+                logging.info("[MQTT] Connected to broker")
+            else:
+                logging.error(f"[MQTT] Connection failed (rc={rc})")
+
+        def on_disconnect(client, userdata, rc):
+            logging.info(f"[MQTT] Disconnected (rc={rc})")
+
+        c = mqtt_client.Client(client_id=client_id)
+        c.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
+        c.on_connect = on_connect
+        c.on_disconnect = on_disconnect
+        c.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
+        return c
+
+    def retrieve_data(
+        self,
+        signals: List[str],
+        period: float,
+        sample_interval: float,
+    ) -> List[Dict]:
         """
-        Retrieve real-time data from SINDIT DT Platform based on the query.
+        Subscribe to one topic per signal, collect for `period` seconds,
+        then downsample to one message per `sample_interval` window.
 
         Args:
-            query: Natural language query about manufacturing data
+            signals         : list of signal names (appended after data/)
+            period          : total listening time in seconds
+            sample_interval : one sample kept per this many seconds
 
         Returns:
-            dict: Real-time data from SINDIT DT Platform
+            List of dicts {topic, payload, received_at}
         """
+        messages = []
 
-        relevant_assets = self.classify_query(query)
+        def on_message(client, userdata, msg):
+            try:
+                payload = json.loads(msg.payload.decode())
+            except Exception:
+                payload = msg.payload.decode()
+            messages.append({
+                "topic":       msg.topic,
+                "payload":     payload,
+                "received_at": time.time(),
+            })
 
-        # Get available data using correct endpoints
-        streaming_data = {}
+        client = self.connect_mqtt()
+        client.on_message = on_message
 
-        # Get all node types to understand available data structure
-        node_types = client.p('kg/node_types')
-        streaming_data['node_types'] = node_types
+        # Subscribe to one topic per signal
+        for signal in signals:
+            full_topic = f"{MQTT_BASE_TOPIC}/{signal}"
+            client.subscribe(full_topic)
+            logging.info(f"[MQTT] Subscribed to {full_topic}")
 
-        assets = []
+        logging.info(f"[MQTT] Listening for {period}s (sample_interval={sample_interval}s)...")
+        client.loop_start()
+        time.sleep(period)
+        client.loop_stop()
+        client.disconnect()
+        logging.info(f"[MQTT] Collected {len(messages)} raw message(s)")
 
-        for asset_uri in relevant_assets:
-            asset_data = client.query_get_api('kg/node', asset_uri, 'node_uri')
-            assets.append(asset_data)
+        if not messages:
+            return []
 
-        streaming_data['data'] = assets
+        #keep the last message per sample_interval window
+        t0 = messages[0]["received_at"]
+        windows: Dict[int, Dict] = {}
+        for msg in messages:
+            window_index = int((msg["received_at"] - t0) / sample_interval)
+            windows[window_index] = msg  # overwrite → keeps latest in each window
 
-        # Get connection information
-        connection_data = client.query_get_api('kg/node', "http://sindit.sintef.no/2.0#mqtt-connection", 'node_uri')
-        streaming_data['connections'] = [connection_data] if connection_data else []
+        samples = [windows[k] for k in sorted(windows)]
+        logging.info(f"[MQTT] Downsampled to {len(samples)} sample(s)")
+        return samples
 
-        return streaming_data
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Monitoring Agent
+# ─────────────────────────────────────────────────────────────────────────────
 
 class MonitoringAgent:
     """
-    Monitoring Agent for real-time manufacturing data retrieval and analysis.
+    Monitoring Agent for real-time CNC machine data via MQTT.
 
-    This agent connects to the SINDIT Knowledge Graph API to retrieve real-time
-    manufacturing data and provides insights about factory operations, sensor status,
-    and equipment monitoring.
+    Step 1 — classify: LLM extracts signals, period, sample_interval from query.
+    Step 2 — validate: check LLM output against KNOWN_SIGNALS list.
+    Step 3 — collect:  connect to broker, gather samples.
+    Step 4 — answer:   LLM formulates a natural-language answer from the samples.
     """
 
-    def __init__(self):
-        """Initialize the Monitoring Agent with necessary tools and LLM."""
+    def __init__(self) -> None:
+        self._llm  = _get_llm()
+        self._tool = SINDITMQTTTool()
 
-        # Initialize tools
-        self.sindit_data_tool = SINDITDataTool()
-        # self.status_analyzer = ManufacturingStatusAnalyzer()
-
-        # Initialize chat model with flexible LLM config
-        self._llm = _get_llm()
-
-        # Initialize conversation chain
-        self.initialize_conversation_chain()
-
-    def initialize_conversation_chain(self):
-        """Initialize the conversation chain for the monitoring agent."""
-
-        self.system_msg_template = SystemMessagePromptTemplate.from_template(
-            template="""
-            You are a specialized Monitoring Agent for the fischertechnik Training Factory Industry 4.0 system.
-            Your expertise lies in real-time data monitoring, sensor analysis, and manufacturing status assessment.
-
-            Your capabilities include:
-            - Retrieving real-time sensor data from the SINDIT Knowledge Graph
-            - Analyzing manufacturing equipment status (VGR, HBW, SLD, MPO, DSO, DSI)
-                - Manufacturing equipment status (VGR, HBW, SLD, MPO, DSO, DSI)
-                - VGR: Vacuum Gripper Robot
-                - HBW: High Bay Warehouse
-                - SLD: Sorting Line with Detection
-                - MPO: Multi Processing Station with Oven
-                - DSI/DSO: Sensor for incoming/outgoing pieces
-            - Monitoring environmental conditions (temperature, humidity, air quality, brightness)
-            - Assessing data connection health and streaming properties
-            - Providing insights on factory operational status
-
-            When answering questions about manufacturing status or sensor data:
-            1. Always retrieve the latest real-time data first
-            2. Analyze the data for patterns, anomalies, or status indicators
-            3. Provide related information about factory operations
-            4. Reference specific sensor readings and asset statuses when available
-
-            Be technical but accessible, focusing on operational insights that help with:
-            - Production monitoring and control
-            - Preventive maintenance planning
-            - Environmental condition assessment
-            - System health and connectivity status
-            - Performance optimization opportunities
-
-            If real-time data is unavailable or incomplete, clearly indicate what information is missing
-            and suggest alternative monitoring approaches.
-            """
-        )
-
-        self.human_msg_template = HumanMessagePromptTemplate.from_template(template="{input}")
-
-        self.prompt_template = ChatPromptTemplate.from_messages([
-            self.system_msg_template,
-            self.human_msg_template
-        ])
+    def classify_query(self, user_query: str) -> MQTTQueryParams:
+        """
+        Ask the LLM which signals to subscribe to, and for how long.
+        Validates and sanitises the response before returning.
+        """
+        chain = _CLASSIFIER_PROMPT | self._llm.with_structured_output(MQTTQueryParams)
+        raw: MQTTQueryParams = chain.invoke({
+            "known_signals": "\n".join(f"  - {s}" for s in KNOWN_SIGNALS),
+            "query": user_query,
+        })
+        logging.info(f"[MonitoringAgent] LLM classified → signals={raw.signals}, "
+              f"period={raw.period}s, sample_interval={raw.sample_interval}s")
+        validated = validate_mqtt_params(raw)
+        logging.info(f"[MonitoringAgent] After validation → signals={validated.signals}, "
+              f"period={validated.period}s, sample_interval={validated.sample_interval}s")
+        return validated
 
     def get_realtime_context(self, query: str) -> Dict[str, Any]:
-        """
-        Get real-time monitoring context.
-
-        Args:
-            query: User's question
-
-        Returns:
-            dict: Real-time monitoring context
-        """
-
-        # Get real-time data
-        realtime_data = self.sindit_data_tool.run(query)
-
+        """Classify query → collect MQTT data → return raw context dict."""
+        params = self.classify_query(query)
+        samples = self._tool.retrieve_data(
+            signals=params.signals,
+            period=params.period,
+            sample_interval=params.sample_interval,
+        )
         return {
-            "realtime_data": realtime_data,
-            "source": "MonitoringAgent"
+            "samples": samples,
+            "signals_used": params.signals,
+            "period": params.period,
+            "sample_interval": params.sample_interval,
         }
 
     def query(self, user_query: str) -> str:
         """
-        Process a user query about manufacturing monitoring.
+        Full pipeline: classify → collect → answer.
 
         Args:
-            user_query: User's question about manufacturing status or real-time data
+            user_query: Natural-language question about live machine data.
 
         Returns:
-            str: Comprehensive response with real-time data analysis
+            str: LLM answer grounded in the collected MQTT samples.
         """
-        # Retrieve real-time data relevant to the query by using the SINDIT data tool
-        real_time_context = self.get_realtime_context(user_query)
-        real_time_data = real_time_context.get("realtime_data", {})
+        context = self.get_realtime_context(user_query)
+        samples = context["samples"]
 
-        # Format the input for the conversation chain
-        formatted_input = f"""
-        User Query: {user_query}
+        if not samples:
+            return (
+                "No MQTT data was received during the collection window. "
+                "The broker may be unreachable (check VPN / network) or no machine "
+                "is currently publishing on the subscribed topics."
+            )
 
-        Real-time Data Retrieved:
-        {json.dumps(real_time_data, indent=2)}
-
-        Please provide a comprehensive response based on this real-time manufacturing data.
-        """
-
-        # Generate response using the conversation chain
-        response_result = self._llm.invoke({"input": formatted_input})
-        
-        # Extract the text content from the response
-        if isinstance(response_result, dict):
-            response = response_result.get('text', str(response_result))
-        else:
-            response = str(response_result)
-
-        return response
-
-    def get_sindit_status(self) -> Dict[str, Any]:
-        """
-        Retrieve connection info of MQTT connections from SINDIT Knowledge Graph API.
-
-        Returns:
-            dict: Real-time data from SINDIT DT Platform
-        """
-
-        return client.query_get_connections_info('kg/node', "http://sindit.sintef.no/2.0#mqtt-connection")
+        chain = _ANSWER_PROMPT | self._llm
+        result = chain.invoke({
+            "question": user_query,
+            "samples":  json.dumps(samples, indent=2, default=str),
+        })
+        return result.content if hasattr(result, "content") else str(result)

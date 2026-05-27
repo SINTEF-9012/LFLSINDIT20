@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Graph Transformer Utilities.
 This module provides utilities for transforming and extracting knowledge graphs
+import logging
 from documents. It includes functions to create extraction chains,
 map nodes and relationships to base types, and store the extracted graphs
 in a Neo4j database.
@@ -15,7 +16,7 @@ from ..util.sindit_client import SINDITClient #class to store graph
 from  .graph_model_for_llm import SINDITKnowledgeGraph, SINDITProperty #Graph
 from ..util.sindit_client import SINDITClient
 import re
-
+import logging
 def detect_language(text: str) -> str:
     """
     Detect the language of the input text.
@@ -182,10 +183,10 @@ Respond ONLY with the structured output. Do not add explanations outside the sch
     if os.getenv("DEBUG_LLM", "0") == "1":
         from langchain_core.runnables import RunnableLambda
         def _log_raw(x):
-            print("\n" + "="*60)
-            print("🔍 RAW LLM OUTPUT:")
-            print(x.content if hasattr(x, "content") else str(x))
-            print("="*60 + "\n")
+            logging.info("\n" + "="*60)
+            logging.info("🔍 RAW LLM OUTPUT:")
+            logging.info(x.content if hasattr(x, "content") else str(x))
+            logging.info("="*60 + "\n")
             return x
         raw_chain = prompt | llm | RunnableLambda(_log_raw)
         # Runs extraction in raw mode to inspect output, then continues normally
@@ -227,12 +228,12 @@ def extract_graph_only(
 
     for attempt in range(max_retries):
         try:
-            print(f"[LLM] Attempt {attempt+1}/{max_retries} — page {page_val}, {len(document.page_content)} chars — calling LLM...", flush=True)
+            logging.info(f"[LLM] Attempt {attempt+1}/{max_retries} — page {page_val}, {len(document.page_content)} chars — calling LLM...")
             _t0 = _time.time()
             # Pass the content with the correct key name 'input'
             Knowledge_graph = extract_chain.invoke({"input": document.page_content})
             elapsed = _time.time() - _t0
-            print(f"[LLM] Done in {elapsed:.1f}s — {len(Knowledge_graph.assets)} assets, {len(Knowledge_graph.relationships)} relationships", flush=True)
+            logging.info(f"[LLM] Done in {elapsed:.1f}s — {len(Knowledge_graph.assets)} assets, {len(Knowledge_graph.relationships)} relationships")
             source_val = document.metadata.get("source", "")
             page_val = document.metadata.get("page", "")
             page_content = document.page_content or "" 
@@ -266,17 +267,17 @@ def extract_graph_only(
                 
         except ValidationError as e:
             if attempt < max_retries - 1:
-                print(f"[RETRY {attempt+1}/3] Chunk page={page_val} — ValidationError: {e}", flush=True)
+                logging.error(f"[RETRY {attempt+1}/3] Chunk page={page_val} — ValidationError: {e}")
                 continue
             else:
-                print(f"ValidationError after {max_retries} attempts: {e}. Returning empty graph...")
+                logging.error(f"ValidationError after {max_retries} attempts: {e}. Returning empty graph...")
                 return SINDITKnowledgeGraph(
                     assets=[],
                     relationships=[],
                 )
                 
         except Exception as e:
-            print(f"Unexpected error during extraction: {e}. Returning empty graph...")
+            logging.error(f"Unexpected error during extraction: {e}. Returning empty graph...")
             return SINDITKnowledgeGraph(
                 assets=[],
                 relationships=[],

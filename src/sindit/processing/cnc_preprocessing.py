@@ -1,3 +1,4 @@
+import logging
 import os
 import glob
 import pandas as pd
@@ -41,7 +42,7 @@ def convert_all_cnc_data():
 
 def convert_csv_to_parquet(file_path):
     if not os.path.exists(file_path):
-        print(f"File not found: {file_path}")
+        logging.error(f"File not found: {file_path}")
         return
 
     df = pd.read_csv(file_path, low_memory=False)
@@ -50,7 +51,7 @@ def convert_csv_to_parquet(file_path):
 
     out_path = file_path.replace('.csv', '.parquet')
     df.to_parquet(out_path, index=False)
-    print(f"Converted: {out_path}")
+    logging.info(f"Converted: {out_path}")
 
 
 def load_and_filter_data(file_path, time_range):
@@ -69,7 +70,7 @@ def load_and_filter_data(file_path, time_range):
         Filtered DataFrame, or empty DataFrame if file not found
     """
     if not os.path.exists(file_path):
-        print(f"File not found: {file_path}")
+        logging.error(f"File not found: {file_path}")
         return pd.DataFrame()
 
     # Prepare time bounds with UTC timezone
@@ -117,8 +118,8 @@ def load_requested_workpiece_data(of_id, query_types, time_range):
         )
     """
     data = {}
-    print("I load the requested workpiece data, only this query types files :")
-    print(query_types)
+    logging.info("I load the requested workpiece data, only this query types files :")
+    logging.info(query_types)
     if query_types:
         query_types_to_file_types = {
             'state': 'TYZBPS', 'power': 'BXCZ3M', 'vibration':'7N4ZJ8'
@@ -126,20 +127,20 @@ def load_requested_workpiece_data(of_id, query_types, time_range):
     
         for file_type in query_types:
             corresponding_file_type = query_types_to_file_types[file_type]
-            print(f"I load {corresponding_file_type}")
+            logging.info(f"I load {corresponding_file_type}")
             # Files are stored in a subfolder named after the OF
             # e.g. data/cnc/OF10001/OF10001_G_BQC_S8CF2G_TYZBPS.parquet
             pattern = os.path.join(CNC_DIR, of_id, f"{of_id}_*_{corresponding_file_type}.parquet")
             matches = glob.glob(pattern)
 
             if not matches:
-                print(f"File not found: OF={of_id}, type={corresponding_file_type}")
+                logging.error(f"File not found: OF={of_id}, type={corresponding_file_type}")
                 continue
 
             file_path = matches[0]
             df = load_and_filter_data(file_path, time_range)
             data[file_type] = df
-            print(f"Loaded: {os.path.basename(file_path)} → {len(df)} rows")
+            logging.info(f"Loaded: {os.path.basename(file_path)} → {len(df)} rows")
 
     return data if data else None
 
@@ -224,23 +225,23 @@ def load_resampled_workpiece(of_id, query_types, time_range, resample_interval='
             resample_interval="5S"
         )
     """
-    print(f"Loading workpiece: {of_id}")
+    logging.info(f"Loading workpiece: {of_id}")
     raw_data = load_requested_workpiece_data(of_id, query_types, time_range)
 
     if not raw_data:
-        print(f"No data found for {of_id}")
+        logging.warning(f"No data found for {of_id}")
         return None
 
     resampled_data = {}
     for file_type, df in raw_data.items():
-        print(f"Resampling {file_type}...")
+        logging.info(f"Resampling {file_type}...")
         resampled_data[file_type] = resample_cnc_dataframe(df, resample_interval)
 
-    print("Merging files...")
+    logging.info("Merging files...")
     merged = merge_workpiece_files(resampled_data)
 
     if merged is not None:
-        print(f"Done: {of_id} → {len(merged)} rows, {len(merged.columns)} columns")
+        logging.info(f"Done: {of_id} → {len(merged)} rows, {len(merged.columns)} columns")
 
     return merged
 

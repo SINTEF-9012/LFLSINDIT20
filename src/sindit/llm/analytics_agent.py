@@ -269,11 +269,11 @@ class AnalyticsAgent:
 
         tr_start = tr_key[0]
         tr_end = tr_key[1]
-        print(f"[AnalyticsAgent] Loading file | workpiece={of_id} | type={query_type} "
+        logging.info(f"[AnalyticsAgent] Loading file | workpiece={of_id} | type={query_type} "
               f"| filter={tr_start} → {tr_end}")
 
         if cache_key in self._per_file_cache:
-            print(f"[AnalyticsAgent] Cache HIT for {of_id}/{query_type}")
+            logging.warning(f"[AnalyticsAgent] Cache HIT for {of_id}/{query_type}")
             return self._per_file_cache[cache_key]
 
         ft = self._QT_TO_FT.get(query_type)
@@ -287,7 +287,7 @@ class AnalyticsAgent:
             return pd.DataFrame()
 
         df = load_and_filter_data(matches[0], time_range)
-        print(f"Loaded: {os.path.basename(matches[0])} → {len(df)} rows")
+        logging.info(f"Loaded: {os.path.basename(matches[0])} → {len(df)} rows")
         self._per_file_cache[cache_key] = df
         return df
 
@@ -323,7 +323,7 @@ class AnalyticsAgent:
 
         start_str = time_range[0].strftime('%Y-%m-%d %H:%M') if hasattr(time_range[0], 'strftime') else str(time_range[0])
         end_str = time_range[1].strftime('%Y-%m-%d %H:%M') if hasattr(time_range[1], 'strftime') else str(time_range[1])
-        print(f"[AnalyticsAgent] load_workpiece_data | workpieces={workpieces} "
+        logging.info(f"[AnalyticsAgent] load_workpiece_data | workpieces={workpieces} "
               f"| query_types={query_types} | time_range={start_str} → {end_str}")
 
         if force_reload:
@@ -336,11 +336,11 @@ class AnalyticsAgent:
         data_dict: Dict[str, pd.DataFrame] = {}
 
         for of_id in workpieces:
-            print(f"Loading workpiece: {of_id}")
+            logging.info(f"Loading workpiece: {of_id}")
             raw: Dict[str, pd.DataFrame] = {}
 
             for qt in query_types:
-                print(f"I load {self._QT_TO_FT.get(qt, qt)}")
+                logging.info(f"I load {self._QT_TO_FT.get(qt, qt)}")
                 df = self._load_single_file_cached(of_id, qt, time_range)
                 if df is not None and not df.empty:
                     raw[qt] = df
@@ -351,10 +351,10 @@ class AnalyticsAgent:
 
             resampled: Dict[str, pd.DataFrame] = {}
             for qt, df in raw.items():
-                print(f"Resampling {qt}...")
+                logging.info(f"Resampling {qt}...")
                 resampled[qt] = resample_cnc_dataframe(df, resample_interval)
 
-            print("Merging files...")
+            logging.info("Merging files...")
             merged = merge_workpiece_files(resampled)
             if merged is not None:
                 # Log the actual timestamp range present in the merged data
@@ -362,11 +362,11 @@ class AnalyticsAgent:
                 if ts_col is not None and not ts_col.empty:
                     actual_start = ts_col.min()
                     actual_end = ts_col.max()
-                    print(f"[AnalyticsAgent] Done: {of_id} → {len(merged)} rows, "
+                    logging.info(f"[AnalyticsAgent] Done: {of_id} → {len(merged)} rows, "
                           f"{len(merged.columns)} columns | "
                           f"actual range: {actual_start} → {actual_end}")
                 else:
-                    print(f"Done: {of_id} → {len(merged)} rows, {len(merged.columns)} columns")
+                    logging.info(f"Done: {of_id} → {len(merged)} rows, {len(merged.columns)} columns")
                 data_dict[of_id] = merged
 
         self.loaded_data.update(data_dict)
@@ -652,7 +652,7 @@ class AnalyticsAgent:
             if time_range is None:
                 time_range = self.parse_time_range_from_query(query_text)
 
-            print(f"[AnalyticsAgent] query() | resolved time_range: "
+            logging.info(f"[AnalyticsAgent] query() | resolved time_range: "
                   f"{time_range[0].strftime('%Y-%m-%d %H:%M')} → "
                   f"{time_range[1].strftime('%Y-%m-%d %H:%M')}")
 
@@ -671,11 +671,11 @@ class AnalyticsAgent:
                     "success": False,
                 }
 
-            print("Je classifie")
+            logging.info("Je classifie")
             query_types = self._classify_query_types(query_text)
-            print("query_types : ", query_types)
+            logging.info(f"query_types : {query_types}")
             workpieces_to_load = self._detect_workpieces_from_query(query_text)
-            print("workpieces_to_load : ", workpieces_to_load)
+            logging.info(f"workpieces_to_load : {workpieces_to_load}")
 
             self.load_workpiece_data(workpieces_to_load, query_types, time_range)
 
@@ -904,7 +904,7 @@ class AnalyticsAgent:
             try:
                 start = datetime.strptime(f"{m.group(1)} {m.group(2)}:{m.group(3)}", "%Y-%m-%d %H:%M")
                 end = datetime.strptime(f"{m.group(4)} {m.group(5)}:{m.group(6)}", "%Y-%m-%d %H:%M")
-                print(f"[TimeParser] Full datetime range: {start} → {end}")
+                logging.info(f"[TimeParser] Full datetime range: {start} → {end}")
                 return (start, end)
             except ValueError:
                 pass
@@ -920,7 +920,7 @@ class AnalyticsAgent:
                 date_str = m.group(1)
                 start = datetime.strptime(f"{date_str} {m.group(2)}:{m.group(3)}", "%Y-%m-%d %H:%M")
                 end = datetime.strptime(f"{date_str} {m.group(4)}:{m.group(5)}", "%Y-%m-%d %H:%M")
-                print(f"[TimeParser] Date + time range (same day): {start} → {end}")
+                logging.info(f"[TimeParser] Date + time range (same day): {start} → {end}")
                 return (start, end)
             except ValueError:
                 pass
@@ -957,10 +957,10 @@ class AnalyticsAgent:
             base_date_for_time = _DATA_START.replace(hour=0, minute=0, second=0)
             start_t, end_t = self._parse_time_in_query(q, base_date_for_time)
             if start_t and end_t:
-                print(f"[TimeParser] Time-only range detected (no date in query): "
+                logging.info(f"[TimeParser] Time-only range detected (no date in query): "
                       f"{start_t.strftime('%Y-%m-%d %H:%M')} → {end_t.strftime('%Y-%m-%d %H:%M')}")
                 return (start_t, end_t)
-            print(f"[TimeParser] No time pattern found — using default range: "
+            logging.info(f"[TimeParser] No time pattern found — using default range: "
                   f"{self.default_time_range[0]} → {self.default_time_range[1]}")
             return self.default_time_range
 

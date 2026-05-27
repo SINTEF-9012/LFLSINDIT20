@@ -2,7 +2,6 @@ import json
 import logging
 from .llm_config import _get_llm
 
-logger = logging.getLogger(__name__)
 
 from typing import Dict, List
 
@@ -14,10 +13,10 @@ class DebugPromptCallback(BaseCallbackHandler):
     """Prints the full prompt sent to the LLM (for debugging)."""
     def on_llm_start(self, serialized, prompts, **kwargs):
         for i, p in enumerate(prompts):
-            print(f"\n{'='*60}")
-            print(f"[LLM PROMPT #{i+1}]")
-            print(p)
-            print('='*60)
+            logging.info(f"\n{'='*60}")
+            logging.info(f"[LLM PROMPT #{i+1}]")
+            logging.info(p)
+            logging.info('='*60)
 
 
 class RetrieverAgent:
@@ -149,5 +148,5 @@ class RetrieverAgent:
             bindings = data.get("results", {}).get("bindings", [])
             return [b["source"]["value"] for b in bindings if "source" in b]
         except Exception as e:
-            print(f"Error retrieving available sources: {e}")
+            logging.error(f"Error retrieving available sources: {e}")
             return []
