@@ -8,17 +8,17 @@ class SINDITProperty(BaseModel):
     propertyDescription: Optional[str] = None
 
 class SINDITAsset(BaseModel):
-    id: str # ex: "Pompe_P401"
+    id: str # ex: "Pump_P401"
     label: str
     assetType: str # "Pump", "Motor", "Sensor"...
     assetDescription: Optional[str]
-    properties: List[SINDITProperty] # paramètres de CET asset
+    properties: List[SINDITProperty]
 
 class SINDITRelationship(BaseModel):
-    sourceId: str # id de l'asset source
-    targetId: str # id de l'asset cible
+    sourceId: str # id of the source asset
+    targetId: str # id of the target
     relationshipType: str                
-    # UNIQUEMENT parmi :
+    # ONLY among :
     # consistsOf, partOf, connectedTo,
     # dependsOn, derivedFrom, monitors,
     # controls, simulates, uses,

@@ -10,7 +10,6 @@ services:
     volumes:
       # Mount only the data directory to persist repositories
       - ./GraphDB/home/data:/opt/graphdb/dist/data/
-
   sindit:
     build:
       context: .

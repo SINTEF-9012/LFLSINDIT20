@@ -21,28 +21,29 @@ from .llm_config import _get_llm
 from .monitoring_agent import MonitoringAgent
 from .retriver_agent import RetrieverAgent
 from .analytics_agent import AnalyticsAgent
+from .green_agent import GreenAgent
 from ..util.embedding import embedding_model
 
 class IntegratedAgent:
     """
-    Integrated Manufacturing Agent that combines retriever, monitoring, and analytics capabilities.
+    Integrated Manufacturing Agent that combines retriever, monitoring, analytics and green capabilities.
 
     This agent provides comprehensive manufacturing support by:
     1. Retrieving documentation and manuals from GraphDB (via RetrieverAgent)
     2. Monitoring real-time manufacturing data from SINDIT DT platform (via MonitoringAgent)
     3. Analyzing historical manufacturing data with charts and insights (via AnalyticsAgent)
-    4. Providing unified responses that combine static knowledge, live data, and historical analytics
+    4. Providing carbon footprint analysis from DPP data (via GreenAgent)
+    5. Providing unified responses that combine static knowledge, live data, historical analytics and CO2 data
     """
 
     def __init__(self):
-        """Initialize the Integrated Agent with retriever, monitoring, and analytics capabilities."""
+        """Initialize the Integrated Agent with retriever, monitoring, analytics and green capabilities."""
 
         # MonitoringAgent is optional — set to None if not available
-        self.monitoring_agent = None
-        # self.monitoring_agent = MonitoringAgent()
-
+        self.monitoring_agent = MonitoringAgent()
         self.retriever_agent = RetrieverAgent()
         self.analytics_agent = AnalyticsAgent()
+        self.green_agent = GreenAgent()
 
         self.llm = _get_llm()
         self.embeddings = embedding_model
@@ -138,6 +139,20 @@ class IntegratedAgent:
                 "Analyze chatter frequency trends over time",
                 "What is the average power consumption per workpiece?",
                 "Show me the historical temperature trends at the spindle head"
+            ],
+            'green': [
+                "What is the carbon footprint of workpiece OF10005?",
+                "What is the CO2 emission for the last batch?",
+                "Show me the environmental impact of OF10001",
+                "What is the total CO2 for the production of OF10005?",
+                "How much CO2 was emitted during manufacturing of OF10003?",
+                "What is the carbon footprint of the raw materials for OF10002?",
+                "Show me the DPP data for OF10005",
+                "What is the cradle-to-gate footprint of the last workpiece?",
+                "How much CO2 does the transport phase represent for OF10004?",
+                "What is the climate impact of producing OF10005?",
+                "Compare the CO2 emissions between OF10001 and OF10005",
+                "What is the A3 manufacturing footprint for OF10003?",
             ]
         }
         
@@ -154,7 +169,6 @@ class IntegratedAgent:
                     self.category_mapping[question] = category
                     self.question_embeddings[category] = np.array(embeddings)
         except Exception as e:
-            # Fallback: use simple keyword matching if embeddings fail
             logging.error(f"Warning: Semantic classification initialization failed: {e}")
             self.question_embeddings = None
 
@@ -176,8 +190,7 @@ class IntegratedAgent:
             dict: Category confidence scores
         """
         if self.question_embeddings is None:
-            # Fallback to equal weights if semantic search is unavailable
-            return {'documentation': 0.33, 'monitoring': 0.33, 'analytics': 0.33}
+            return {'documentation': 0.25, 'monitoring': 0.25, 'analytics': 0.25, 'green': 0.25}
         
         try:
             # Get embedding for the user query
@@ -200,8 +213,7 @@ class IntegratedAgent:
             
         except Exception as e:
             logging.error(f"Warning: Semantic classification failed: {e}")
-            # Fallback to equal weights
-            return {'documentation': 0.33, 'monitoring': 0.33, 'analytics': 0.33}
+            return {'documentation': 0.25, 'monitoring': 0.25, 'analytics': 0.25, 'green': 0.25}
 
     def initialize_conversation_chain(self, source_filter: str = None):
         """Initialize the conversation chain for the integrated agent with use case-specific context."""
@@ -243,6 +255,12 @@ class IntegratedAgent:
         - Tool wear indicators from power and vibration signals
         - Cross-workpiece comparisons and performance benchmarking
 
+        CARBON FOOTPRINT & SUSTAINABILITY (via Green Agent):
+        - CO2 emissions per production batch (DPP data, ISO 14044)
+        - Lifecycle phase breakdown: A1 (raw materials), A2 (transport), A3 (manufacturing)
+        - Total cradle-to-gate carbon footprint per workpiece
+        - Environmental impact analysis of CNC manufacturing operations
+
         Data time range: September 2025 – March 2026.
         Always clearly indicate which data source you are drawing from in your response.
         """
@@ -251,13 +269,14 @@ class IntegratedAgent:
         integration_approach = """
         INTEGRATION APPROACH:
         When answering questions:
-        1. First determine if the question requires static knowledge, real-time data, historical analytics, or combinations
+        1. First determine if the question requires static knowledge, real-time data, historical analytics, carbon footprint data, or combinations
         2. Retrieve relevant documentation/manuals if needed for context
         3. Get current real-time data if the question involves current status or monitoring
         4. Perform historical analysis if the question involves trends, patterns, or performance optimization
-        5. Combine all sources to provide comprehensive, accurate responses
-        6. Clearly distinguish between documented procedures, current operational status, and historical insights
-        7. Provide related information that bridges theory, current practice, and historical performance
+        5. Use DPP/Green data if the question involves CO2, emissions, or environmental impact
+        6. Combine all sources to provide comprehensive, accurate responses
+        7. Clearly distinguish between documented procedures, current operational status, historical insights, and carbon footprint data
+        8. Provide related information that bridges theory, current practice, historical performance, and sustainability
 
         RESPONSE STRUCTURE:
         - Start with current status/data if relevant
@@ -309,8 +328,23 @@ class IntegratedAgent:
             'tell me what you said', 'what did we talk',
         ]
         if any(p in query_lower for p in _CONVERSATIONAL_PATTERNS):
-            # Pure conversation — all agents OFF, the LLM handles it alone
-            return {'MonitoringAgent': False, 'RetrieverAgent': False, 'AnalyticsAgent': False}
+            return {'MonitoringAgent': False, 'RetrieverAgent': False, 'AnalyticsAgent': False, 'GreenAgent': False}
+
+        # STEP 0b: Real-time shortcut — questions about the *current/live* machine state.
+        # "currently" (adverb), "right now", or "current <signal>" are unambiguous live-data
+        # queries: only MonitoringAgent is needed, never the knowledge graph.
+        _RT_ADVERBS = ['currently', 'right now', 'at this moment', 'at this instant']
+        _RT_SIGNAL_PHRASES = [
+            'current spindle', 'current feed', 'current tool', 'current power',
+            'current temperature', 'current position', 'current status',
+            'current program', 'current operation', 'current alarm',
+            'current speed', 'current mode', 'machine status',
+            'active alarm', 'live data', 'live sensor',
+        ]
+        if (any(kw in query_lower for kw in _RT_ADVERBS) or
+                any(sig in query_lower for sig in _RT_SIGNAL_PHRASES)):
+            logging.info("[classify] Real-time shortcut triggered → MonitoringAgent only")
+            return {'MonitoringAgent': True, 'RetrieverAgent': False, 'AnalyticsAgent': False, 'GreenAgent': False}
 
         # STEP 1: Semantic vector search (primary classification method)
         semantic_scores = self._semantic_classify_query(query)
@@ -325,6 +359,7 @@ class IntegratedAgent:
             needs_realtime = max_semantic_category[0] == 'monitoring'
             needs_documentation = max_semantic_category[0] == 'documentation'
             needs_analytics = max_semantic_category[0] == 'analytics'
+            needs_green = max_semantic_category[0] == 'green'
             
             # For very high confidence (>0.95), skip time pattern detection to avoid overrides
             time_override_allowed = max_semantic_score <= 0.95
@@ -334,6 +369,7 @@ class IntegratedAgent:
             needs_realtime = llm_classification.get('realtime', False)
             needs_documentation = llm_classification.get('documentation', True)  # Default fallback
             needs_analytics = llm_classification.get('analytics', False)
+            needs_green = llm_classification.get('green', False)
             
             # Allow time pattern override for LLM classifications
             time_override_allowed = True
@@ -355,11 +391,12 @@ class IntegratedAgent:
                 needs_analytics = False
                 needs_documentation = True  # Redirect to documentation
 
+
         # STEP 5: Safety net — ensure at least one agent is selected,
         # but ONLY if this isn't a conversational question (already handled in Step 0).
         # If we reach here with all False, it means the LLM classification returned all False
         # (unlikely but possible). Use the best semantic score as tiebreaker.
-        if not needs_realtime and not needs_documentation and not needs_analytics:
+        if not needs_realtime and not needs_documentation and not needs_analytics and not needs_green:
             if max_semantic_category[0] == 'monitoring':
                 needs_realtime = True
             elif max_semantic_category[0] == 'analytics':
@@ -372,6 +409,7 @@ class IntegratedAgent:
             'MonitoringAgent': bool(needs_realtime),
             'RetrieverAgent': bool(needs_documentation),
             'AnalyticsAgent': bool(needs_analytics),
+            'GreenAgent': bool(needs_green),
             # # Include diagnostic information for debugging
             # '_classification_debug': {
             #     'semantic_scores': {k: float(v) for k, v in semantic_scores.items()},
@@ -487,15 +525,18 @@ class IntegratedAgent:
             - "realtime": live sensor values right now — current spindle speed, active alarms, current feed rate, machine ON/OFF status.
             - "documentation": descriptions, definitions, procedures, manuals — e.g. "what is X", "describe X", "what does X do", "how to do Y", safety rules, specifications.
             - "analytics": historical time-series analysis of recorded parquet data files (OF10001–OF10005) — trends, power charts, vibration analysis, chatter detection over time.
+            - "green": carbon footprint and environmental impact questions — CO2 emissions, DPP data, lifecycle phases (A1/A2/A3), climate impact of a production batch.
 
             IMPORTANT: a question asking "what is the description of X" or "describe X" is ALWAYS documentation, never analytics.
             Analytics is ONLY for questions about historical data trends, numerical time-series, or workpiece performance over time.
+            Green is ONLY for questions about CO2, carbon footprint, environmental impact, or DPP data.
 
             Respond ONLY with a JSON object, no explanation:
             {{
                 "realtime": true/false,
                 "documentation": true/false,
-                "analytics": true/false
+                "analytics": true/false,
+                "green": true/false
             }}
             """
 
@@ -512,7 +553,7 @@ class IntegratedAgent:
             pass
 
         # Fallback: documentation only
-        return {"realtime": False, "documentation": True, "analytics": False}
+        return {"realtime": False, "documentation": True, "analytics": False, "green": False}
 
     def query(self, user_query: str, source_filter: str = None) -> str:
         """
@@ -551,7 +592,10 @@ class IntegratedAgent:
         # CONVERSATIONAL SHORTCUT: if no agent is needed (pure meta/conversational question),
         # skip all agents and answer directly from the enriched user_query which already
         # contains the full conversation history injected by chatbot_ui.py.
-        no_agent_needed = not query_classification['RetrieverAgent'] and not query_classification['MonitoringAgent'] and not query_classification['AnalyticsAgent']
+        no_agent_needed = (not query_classification['RetrieverAgent']
+                           and not query_classification['MonitoringAgent']
+                           and not query_classification['AnalyticsAgent']
+                           and not query_classification['GreenAgent'])
         
         if no_agent_needed:
             logging.info("No agent needed — answering directly from conversation history")
@@ -566,6 +610,18 @@ class IntegratedAgent:
                 context["documentation"] = doc_context
             except Exception as e:
                 context["documentation"] = {"error": f"Documentation unavailable: {str(e)}"}
+
+        # Get documentation context if needed
+        if query_classification['GreenAgent']:
+            logging.info("I need the GreenAgent")
+            try:
+                print("Avant green")
+                green_context = self.green_agent._run(user_query)
+                print("Avant green")
+                context["green"] = green_context
+            except Exception as e:
+                print(e)
+                context["green"] = {"error": f"Green analysis unavailable: {str(e)}"}
 
         # Get real-time context if needed (only if monitoring agent is connected)
         if query_classification['MonitoringAgent']:
@@ -675,5 +731,14 @@ class IntegratedAgent:
         except Exception as e:
             analytics_status = {"status": "error", "error": str(e)}
         status["system_components"]["analytics"] = analytics_status
+
+        # Get green agent status
+        try:
+            status["system_components"]["green"] = {
+                "status": "available",
+                "mode": "mock" if os.environ.get("USE_MOCK", "True") == "True" else "live API"
+            }
+        except Exception as e:
+            status["system_components"]["green"] = {"status": "error", "error": str(e)}
 
         return status

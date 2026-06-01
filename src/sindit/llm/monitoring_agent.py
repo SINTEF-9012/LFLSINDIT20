@@ -18,22 +18,37 @@ import logging
 from random import randint
 from typing import Any, Dict, List, Optional
 
+from dotenv import load_dotenv
 from paho.mqtt import client as mqtt_client
 from pydantic import BaseModel
 from langchain_core.prompts import ChatPromptTemplate
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+load_dotenv()
+
 from .llm_config import _get_llm
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# MQTT broker credentials (SINTEF CNC machines)
+# MQTT broker — choix automatique selon IS_SIMULATION dans le .env
+# IS_SIMULATION=true  → Mosquitto local (simulation)
+# IS_SIMULATION=false → broker SINTEF   (production)
 # ─────────────────────────────────────────────────────────────────────────────
-MQTT_BROKER   = os.getenv("MQTT_BROKER",   "158.158.8.212")
-MQTT_PORT     = int(os.getenv("MQTT_PORT", "1883"))
-MQTT_USERNAME = os.getenv("MQTT_USERNAME", "reader_user")
-MQTT_PASSWORD = os.getenv("MQTT_PASSWORD", "FpWWvYKMZ.ub3G!lAx6b3")
+IS_SIMULATION = os.getenv("IS_SIMULATION", "false").lower() == "true"
+
+if IS_SIMULATION:
+    MQTT_BROKER   = os.getenv("MQTT_BROKER_SIM", "localhost")
+    MQTT_PORT     = int(os.getenv("MQTT_PORT_SIM", "1883"))
+    MQTT_USERNAME = None
+    MQTT_PASSWORD = None
+    logging.info("[MQTT] SIMULATION mode — broker: %s:%s", MQTT_BROKER, MQTT_PORT)
+else:
+    MQTT_BROKER   = os.getenv("MQTT_BROKER_PROD", "158.158.8.212")
+    MQTT_PORT     = int(os.getenv("MQTT_PORT_PROD", "1883"))
+    MQTT_USERNAME = os.getenv("MQTT_USERNAME", "example_username")
+    MQTT_PASSWORD = os.getenv("MQTT_PASSWORD", "example33_password33")
+    logging.info("[MQTT] PRODUCTION mode — broker: %s:%s", MQTT_BROKER, MQTT_PORT)
 
 # Base topic — signals go after data/
 # reed/machine/+/workorder/+/group/+/data/<signal>
@@ -208,6 +223,9 @@ class SINDITMQTTTool:
     Connects to the SINTEF MQTT broker, collects messages for a given period,
     and downsamples to one message per sample_interval window.
     """
+    def __init__(self):
+        self._buffer: List[Dict] = []   # shared memory
+        self._buffer_max_seconds = 3600  # 1 hour of data
 
     def connect_mqtt(self) -> mqtt_client.Client:
         """Create and connect a paho MQTT client to the SINTEF broker."""
@@ -221,76 +239,64 @@ class SINDITMQTTTool:
 
         def on_disconnect(client, userdata, rc):
             logging.info(f"[MQTT] Disconnected (rc={rc})")
+            self.messages = []
 
         c = mqtt_client.Client(client_id=client_id)
-        c.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
+        if MQTT_USERNAME:
+            c.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
         c.on_connect = on_connect
         c.on_disconnect = on_disconnect
         c.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
         return c
 
-    def retrieve_data(
-        self,
-        signals: List[str],
-        period: float,
-        sample_interval: float,
-    ) -> List[Dict]:
-        """
-        Subscribe to one topic per signal, collect for `period` seconds,
-        then downsample to one message per `sample_interval` window.
+    def __init__(self):
+        self._buffer: List[Dict] = []   # ← mémoire partagée
+        self._buffer_max_seconds = 3600  # garde 1 heure de données
 
-        Args:
-            signals         : list of signal names (appended after data/)
-            period          : total listening time in seconds
-            sample_interval : one sample kept per this many seconds
-
-        Returns:
-            List of dicts {topic, payload, received_at}
-        """
-        messages = []
+    def start_listening(self):
+        """Lance l'écoute MQTT en arrière-plan (non-bloquant)."""
 
         def on_message(client, userdata, msg):
             try:
                 payload = json.loads(msg.payload.decode())
             except Exception:
                 payload = msg.payload.decode()
-            messages.append({
+
+            self._buffer.append({           # ← self._buffer, pas messages local
                 "topic":       msg.topic,
                 "payload":     payload,
                 "received_at": time.time(),
             })
 
+            # Eviction : supprimer les messages trop anciens
+            cutoff = time.time() - self._buffer_max_seconds
+            while self._buffer and self._buffer[0]["received_at"] < cutoff:
+                self._buffer.pop(0)         # ← pop(0), pas drop(0)
+
         client = self.connect_mqtt()
         client.on_message = on_message
 
-        # Subscribe to one topic per signal
-        for signal in signals:
+        for signal in KNOWN_SIGNALS:
             full_topic = f"{MQTT_BASE_TOPIC}/{signal}"
             client.subscribe(full_topic)
             logging.info(f"[MQTT] Subscribed to {full_topic}")
 
-        logging.info(f"[MQTT] Listening for {period}s (sample_interval={sample_interval}s)...")
-        client.loop_start()
-        time.sleep(period)
-        client.loop_stop()
-        client.disconnect()
-        logging.info(f"[MQTT] Collected {len(messages)} raw message(s)")
+        logging.info(f"[MQTT] Listening in background (buffer={self._buffer_max_seconds}s)...")
+        client.loop_start()                 # ← loop_start() non-bloquant, pas loop_forever()
 
-        if not messages:
-            return []
-
-        #keep the last message per sample_interval window
-        t0 = messages[0]["received_at"]
-        windows: Dict[int, Dict] = {}
-        for msg in messages:
-            window_index = int((msg["received_at"] - t0) / sample_interval)
-            windows[window_index] = msg  # overwrite → keeps latest in each window
-
-        samples = [windows[k] for k in sorted(windows)]
-        logging.info(f"[MQTT] Downsampled to {len(samples)} sample(s)")
-        return samples
+    def retrieve_data(self, signals: List[str], period: float) -> List[Dict]:
+        """Lit le buffer et filtre par signal + fenêtre temporelle."""
+        cutoff = time.time() - period
+        result = [
+            msg for msg in self._buffer
+            if msg["received_at"] >= cutoff
+            and any(f"/data/{s}" in msg["topic"] for s in signals)
+        ]
+        logging.info(f"[MQTT] retrieve_data → {len(result)} messages des {period}s pour {signals}")
+        return result
 
 
+    
 # ─────────────────────────────────────────────────────────────────────────────
 # Monitoring Agent
 # ─────────────────────────────────────────────────────────────────────────────
@@ -308,22 +314,27 @@ class MonitoringAgent:
     def __init__(self) -> None:
         self._llm  = _get_llm()
         self._tool = SINDITMQTTTool()
-
+        self._tool.start_listening()
+        
     def classify_query(self, user_query: str) -> MQTTQueryParams:
         """
         Ask the LLM which signals to subscribe to, and for how long.
         Validates and sanitises the response before returning.
         """
-        chain = _CLASSIFIER_PROMPT | self._llm.with_structured_output(MQTTQueryParams)
-        raw: MQTTQueryParams = chain.invoke({
-            "known_signals": "\n".join(f"  - {s}" for s in KNOWN_SIGNALS),
-            "query": user_query,
-        })
-        logging.info(f"[MonitoringAgent] LLM classified → signals={raw.signals}, "
-              f"period={raw.period}s, sample_interval={raw.sample_interval}s")
-        validated = validate_mqtt_params(raw)
-        logging.info(f"[MonitoringAgent] After validation → signals={validated.signals}, "
-              f"period={validated.period}s, sample_interval={validated.sample_interval}s")
+        try:
+            chain = _CLASSIFIER_PROMPT | self._llm.with_structured_output(MQTTQueryParams)
+            raw: MQTTQueryParams = chain.invoke({
+                "known_signals": "\n".join(f"  - {s}" for s in KNOWN_SIGNALS),
+                "query": user_query,
+            })
+            logging.info(f"[MonitoringAgent] LLM classified → signals={raw.signals}, "
+                f"period={raw.period}s, sample_interval={raw.sample_interval}s")
+            validated = validate_mqtt_params(raw)
+            logging.info(f"[MonitoringAgent] After validation → signals={validated.signals}, "
+                f"period={validated.period}s, sample_interval={validated.sample_interval}s")
+        except Exception as e:
+            logging.warning(f"[MonitoringAgent] classify failed ({e}) — using defaults")
+            validated = MQTTQueryParams(signals=["Spindle_Speed_Actual", "Power_Active"], period=10.0, sample_interval=2.0)
         return validated
 
     def get_realtime_context(self, query: str) -> Dict[str, Any]:
@@ -332,7 +343,6 @@ class MonitoringAgent:
         samples = self._tool.retrieve_data(
             signals=params.signals,
             period=params.period,
-            sample_interval=params.sample_interval,
         )
         return {
             "samples": samples,

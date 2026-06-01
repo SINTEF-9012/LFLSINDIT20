@@ -219,13 +219,19 @@ class SINDITGraphTool(BaseTool):
     # Step 0: Classify — can the question be answered from history?
     # ------------------------------------------------------------------
     def _can_answer_from_history(self, question: str) -> tuple:
-        """Ask the LLM if the answer is already in the conversation history.
+        """Check whether the LLM can answer the question without querying the
+            knowledge graph, based on the question alone.
 
-        Returns:
-            (needs_sparql: bool, direct_answer: str | None)
-            - needs_sparql=False → direct_answer contains the answer, skip SPARQL.
-            - needs_sparql=True  → must query the knowledge graph.
-        """
+            Note: despite the name, no actual conversation history is injected —
+            the LLM only receives the current question and decides whether a KG
+            lookup is necessary.
+
+            Returns:
+                (needs_kg: bool, direct_answer: str | None)
+                - needs_kg=False → direct_answer contains the LLM-generated answer,
+                                SPARQL query is skipped.
+                - needs_kg=True  → direct_answer is None, proceed with SPARQL pipeline.
+            """
         classification_prompt = f"""You are a routing assistant. Your only job is to decide if the question below can be answered using the conversation history provided, or if it requires querying a knowledge graph for new information.
 
 {question}
@@ -296,7 +302,7 @@ Answer with valid JSON only, no explanation:
         # Step 3 — QA: format results into a natural language answer
         llm = _get_llm()
         qa_prompt = QA_PROMPT.format(context=sparql_results, question=question)
-        logging.info(f"[SINDITGraphTool] QA_Prompt : {qa_prompt}")
+        # logging.info(f"[SINDITGraphTool] QA_Prompt : {qa_prompt}")
 
         response = llm.invoke(qa_prompt)
         logging.info(f"[SINDITGraphTool] Response : {response}")

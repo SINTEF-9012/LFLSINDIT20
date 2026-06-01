@@ -228,7 +228,7 @@ def extract_graph_only(
 
     for attempt in range(max_retries):
         try:
-            logging.info(f"[LLM] Attempt {attempt+1}/{max_retries} — page {page_val}, {len(document.page_content)} chars — calling LLM...")
+            print(f"[LLM] Attempt {attempt+1}/{max_retries} — page {page_val}, {len(document.page_content)} chars — calling LLM...")
             _t0 = _time.time()
             # Pass the content with the correct key name 'input'
             Knowledge_graph = extract_chain.invoke({"input": document.page_content})
@@ -270,18 +270,20 @@ def extract_graph_only(
                 logging.error(f"[RETRY {attempt+1}/3] Chunk page={page_val} — ValidationError: {e}")
                 continue
             else:
-                logging.error(f"ValidationError after {max_retries} attempts: {e}. Returning empty graph...")
+                logging.error(f"ValidationError after {max_retries} attempts: {e}. Returning empty graph... Make sure your Ollama port is accessible")
+                # exit(1)
                 return SINDITKnowledgeGraph(
                     assets=[],
                     relationships=[],
                 )
                 
         except Exception as e:
-            logging.error(f"Unexpected error during extraction: {e}. Returning empty graph...")
-            return SINDITKnowledgeGraph(
-                assets=[],
-                relationships=[],
-            )
+            logging.error(f"Unexpected error during extraction: {e}. Returning empty graph... Make sure your Ollama port is accessible")
+            exit(1)
+            # return SINDITKnowledgeGraph(
+            #     assets=[],
+            #     relationships=[],
+            # )
 
     return Knowledge_graph
 

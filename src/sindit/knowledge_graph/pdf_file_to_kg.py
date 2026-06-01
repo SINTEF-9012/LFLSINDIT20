@@ -186,7 +186,7 @@ if __name__ == "__main__":
     # Skip the first N pages of the PDF (0 = process all pages).
     # Useful to skip cover page, table of contents, legal notices, etc.
     # Example: START_PAGE = 5  →  processing starts at page index 5
-    START_PAGE = 210
+    START_PAGE = 260
 
     # Skip the first N chunks (0 = process all chunks).
     # Use this to RESUME after a crash: set to the last successfully
