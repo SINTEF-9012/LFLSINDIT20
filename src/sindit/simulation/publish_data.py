@@ -11,7 +11,7 @@ print(f"Publication")
 MQTT_BASE_TOPIC = "reed/machine/M1/workorder/OF10001/group/G1/data"
 start_time = pd.Timestamp("2025-09-01 06:15:00", tz="UTC")
 end_time = pd.Timestamp("2025-09-01 06:30:00", tz="UTC")
-SPEED_FACTOR = 0.5   # 10 = 10x plus rapide que temps réel, 1 = temps réel
+SPEED_FACTOR = 0.5
 
 file_path = os.path.normpath(os.path.join(
     os.path.dirname(__file__),
@@ -19,11 +19,9 @@ file_path = os.path.normpath(os.path.join(
     "OF10001", "OF10001_G_BQC_S8CF2G_TYZBPS.parquet"
 ))
 
-# ── Connexion MQTT ────────────────────────────────────
 client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 client.connect("localhost", 1883, 60)
 
-# ── Lecture du Parquet ────────────────────────────────
 try:
     table = pq.read_table(file_path, filters=[
         ('timestamp', '>=', start_time),
@@ -37,8 +35,8 @@ except Exception:
 data = data.sort_values('timestamp')
 print(f"Lignes à publier : {len(data)}")
 
-# ── Publication : chaque ligne = toutes ses colonnes publiées,
-#    puis on attend l'écart réel vers la ligne suivante / SPEED_FACTOR
+# Publication: each row = all its columns published,
+# then we calculate the actual deviation from the next line / SPEED_FACTOR
 for i, row in data.iterrows():
     for column in data.columns:
         if column != "timestamp":

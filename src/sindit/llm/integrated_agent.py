@@ -676,16 +676,16 @@ class IntegratedAgent:
             classification_json = str(query_classification)
 
         formatted_input = f"""
-        User Query: {user_query}
+            User Query: {user_query}
 
-        Query Classification:
-        {classification_json}
+            Query Classification:
+            {classification_json}
 
-        Available Context:
-        {context_json}
+            Available Context:
+            {context_json}
 
-        Please provide a comprehensive response that integrates documentation knowledge,
-        real-time monitoring data, and historical analytics as appropriate for this query.
+            Please provide a comprehensive response that integrates documentation knowledge,
+            real-time monitoring data, and historical analytics as appropriate for this query.
         """
 
         result = self.conversation_chain.invoke({"input": formatted_input})

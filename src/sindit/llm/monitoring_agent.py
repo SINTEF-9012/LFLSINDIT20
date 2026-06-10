@@ -249,10 +249,6 @@ class SINDITMQTTTool:
         c.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
         return c
 
-    def __init__(self):
-        self._buffer: List[Dict] = []   # ← mémoire partagée
-        self._buffer_max_seconds = 3600  # garde 1 heure de données
-
     def start_listening(self):
         """Lance l'écoute MQTT en arrière-plan (non-bloquant)."""
 
